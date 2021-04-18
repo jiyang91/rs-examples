@@ -74,7 +74,7 @@ int main(int argc, char * argv[]) try
     /// 무한 while loop
     while (true)
     {
-        /// sleep_for?
+        /// 1초동안 스레드를 일시중지 시키는 함수
         std::this_thread::sleep_for(std::chrono::seconds(1));
         /// mutex를 선언-- 왜?
         std::lock_guard<std::mutex> lock(mutex);
