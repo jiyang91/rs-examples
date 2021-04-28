@@ -16,10 +16,13 @@
 #include <mutex>
 
 using pixel = std::pair<int, int>;
-
+/// 실제 2픽셀간의 3차원 거리를 계산하기 위해서 3 차원 거리가 사용된다. 
 // Distance 3D is used to calculate real 3D distance between two pixels
 float dist_3d(const rs2::depth_frame& frame, pixel u, pixel v);
 
+/// Toggle helper class는 자를 컨트롤 하기위한 
+/// 2개의 버튼들을 랜더링 하는데 사용된다.
+/// 
 // Toggle helper class will be used to render the two buttons
 // controlling the edges of our ruler
 struct toggle
@@ -30,6 +33,7 @@ struct toggle
           y(std::min(std::max(yl, 0.f), 1.f))
     {}
 
+    /// 특정 [0,1] space로부터 특정 frame의 pixel space로 옮긴다
     // Move from [0,1] space to pixel space of specific frame
     pixel get_pixel(rs2::depth_frame frm) const
     {
@@ -38,6 +42,7 @@ struct toggle
         return{ px, py };
     }
 
+    /// 특정 app에 랜더링하는 함수
     void render(const window& app)
     {
         glColor4f(0.f, 0.0f, 0.0f, 0.2f);
@@ -47,6 +52,7 @@ struct toggle
         render_circle(app, 6);
     }
 
+    /// 특정 app에 원을 r의 크기로 랜더링하는 함수
     void render_circle(const window& app, float r)
     {
         const float segments = 16;
@@ -63,7 +69,10 @@ struct toggle
         }
         glEnd();
     }
-
+    /// 이 helper function은 마우스 커서에서 가까운 버튼을 찾는데
+    /// 사용된다. 단지 이 거리를 비교할 뿐이기 때문에,
+    /// sqrt는 안전하게 skip될 수있다.
+    /// 
     // This helper function is used to find the button
     // closest to the mouse cursor
     // Since we are only comparing this distance, sqrt can be safely skipped
@@ -77,6 +86,7 @@ struct toggle
     bool selected = false;
 };
 
+///앱 상태를 메인 thread와 GLFW이벤트 사이에서 공유시킨다.
 // Application state shared between the main-thread and GLFW events
 struct state
 {
@@ -99,48 +109,77 @@ void render_simple_distance(const rs2::depth_frame& depth,
 
 int main(int argc, char * argv[]) try
 {
+    /// OpenGL texture들을 위한 Color와 depth 프래임 
     // OpenGL textures for the color and depth frames
     texture depth_image, color_image;
 
+    /// depth 데이터를 시각화하는 colorizer
     // Colorizer is used to visualize depth data
     rs2::colorizer color_map;
+    /// 검은색 
     // Use black to white color map
     color_map.set_option(RS2_OPTION_COLOR_SCHEME, 2.f);
+    /// Decimation filter 은 특정크기의 kernel의 중간값을 이용한 downsampling
+    /// (Decimation filter performs downsampling by using the median with specific kernel size)
+    /// Decimation filter 데이터의 양을 줄여준다.
     // Decimation filter reduces the amount of data (while preserving best samples)
     rs2::decimation_filter dec;
+
+    /// 데모가 너무 느리면, Release에서 돌리도록 하세요.
+    /// 하지만 depth를 더 decimate하여서도 속도를 올릴 수 있습니다(quality 줄이기)
     // If the demo is too slow, make sure you run in Release (-DCMAKE_BUILD_TYPE=Release)
     // but you can also increase the following parameter to decimate depth more (reducing quality)
     dec.set_option(RS2_OPTION_FILTER_MAGNITUDE, 2);
+
+    /// Disparity domain 으로 혹은 반대로 변환하는 transformation들을 정의
     // Define transformations from and to Disparity domain
     rs2::disparity_transform depth2disparity;
     rs2::disparity_transform disparity2depth(false);
+
+    /// spatial filter를 선언
     // Define spatial filter (edge-preserving)
     rs2::spatial_filter spat;
+
+    /// hole-filling 을 켠다
+    /// Hole-filling은 상당히 공격적인 휴리스틱적인 방법이다. 그렇기에 depth를 많이 틀릴 수 있다.
+    /// 그러나, 이 데모는 holes을 다루지 않는다.
+    /// (최단 거리는 항상 홀들을 "잘라서" 가는것을 선호한다. 왜냐하면 홀들은 zero 3D distance를 갖기 때문이다.
     // Enable hole-filling
     // Hole filling is an agressive heuristic and it gets the depth wrong many times
     // However, this demo is not built to handle holes
     // (the shortest-path will always prefer to "cut" through the holes since they have zero 3D distance)
     spat.set_option(RS2_OPTION_HOLES_FILL, 5); // 5 = fill all the zero pixels
+    
+    /// 임시필터 정의
     // Define temporal filter
     rs2::temporal_filter temp;
+    
+    /// Depth viewport로 모든 streams을 공간적으로 align한다.
+    /// 이것을 하는 이유는:
+    ///     a. depth 가 보통 더 큰 FOV를 갖고, 이 데모에서는 깊이만 필요하기 때문이다.
+    ///     b. 새로운 hole들을 소개하기를 원하지 않기 때문이다.
     // Spatially align all streams to depth viewport
     // We do this because:
     //   a. Usually depth has wider FOV, and we only really need depth for this demo
     //   b. We don't want to introduce new holes
     rs2::align align_to(RS2_STREAM_DEPTH);
 
+    /// 실제 기기와 센서들을 캡슐화하여, RealSense 파이프라인을 선언한다.
     // Declare RealSense pipeline, encapsulating the actual device and sensors
     rs2::pipeline pipe;
 
     rs2::config cfg;
     cfg.enable_stream(RS2_STREAM_DEPTH); // Enable default depth
+
+    /// depth frame의 위에 칼라 frame을 blend하기 위해,
+    /// 칼라 stream을 RGBA 포멧으로 세팅하고,
     // For the color stream, set format to RGBA
     // To allow blending of the color frame on top of the depth frame
     cfg.enable_stream(RS2_STREAM_COLOR, RS2_FORMAT_RGBA8);
     auto profile = pipe.start(cfg);
 
     auto sensor = profile.get_device().first<rs2::depth_sensor>();
-
+    ///장치를 D400 stereoscopic cameras의 고정밀도의 예비 세팅으로 세팅한다
     // Set the device to High Accuracy preset of the D400 stereoscopic cameras
     if (sensor && sensor.is<rs2::depth_stereo_sensor>())
     {
@@ -149,21 +188,29 @@ int main(int argc, char * argv[]) try
 
     auto stream = profile.get_stream(RS2_STREAM_DEPTH).as<rs2::video_stream_profile>();
 
+    /// 간단한 OpenGL 창을 rendering을 위해서 만든다.
     // Create a simple OpenGL window for rendering:
     window app(stream.width(), stream.height(), "RealSense Measure Example");
 
+    /// application의 사태와 ruler의 버튼을 정의한다.
     // Define application state and position the ruler buttons
     state app_state;
     app_state.ruler_start = { 0.45f, 0.5f };
     app_state.ruler_end   = { 0.55f, 0.5f };
     register_glfw_callbacks(app, app_state);
 
+    /// 후처리를 초기화 한 후에, 프레임을 이 큐로 흐르게 한다.
     // After initial post-processing, frames will flow into this queue:
     rs2::frame_queue postprocessed_frames;
 
+    /// Alive boolean은 worker thread들에게 끝내는 신호를 준다.
     // Alive boolean will signal the worker threads to finish-up
     std::atomic_bool alive{ true };
 
+    /// 비디오 프로세싱 thread는 카메라로부터 프레임들을 가지고 온다,
+    /// 포스트 프로세싱을 적용하고 결과를 랜더링을 위한 메인쓰레드에 보낸다.
+    /// 동기화된 (하지만 공간적으로 align 되지않은) 쌍들을 받고,
+    /// 그리고 동기화되고 align된 쌍들을 내보낸다.
     // Video-processing thread will fetch frames from the camera,
     // apply post-processing and send the result to the main thread for rendering
     // It recieves synchronized (but not spatially aligned) pairs
@@ -171,33 +218,46 @@ int main(int argc, char * argv[]) try
     std::thread video_processing_thread([&]() {
         while (alive)
         {
+            /// 파이프라인에서 프레임들을 가지고 오고, 
+            /// 프로세싱을 위해서 그들을 보낸다.
             // Fetch frames from the pipeline and send them for processing
             rs2::frameset data;
             if (pipe.poll_for_frames(&data))
             {
+                /// 일단 frame을 공간적으로 alin되게 한다.
                 // First make the frames spatially aligned
                 data = data.apply_filter(align_to);
 
+                /// decimation은 depth 이미지의 해상도를 줄이고,
+                /// 작은 구멍들을 매우고 알고리즘을 가속한다.
                 // Decimation will reduce the resultion of the depth image,
                 // closing small holes and speeding-up the algorithm
                 data = data.apply_filter(dec);
 
+                /// 먼 물체를 비례적으로 필터링하여,
+                /// disparity domain으로 바꾼다.
                 // To make sure far-away objects are filtered proportionally
                 // we try to switch to disparity domain
                 data = data.apply_filter(depth2disparity);
 
+                /// 공간 필터를 적용한다.
                 // Apply spatial filtering
                 data = data.apply_filter(spat);
 
+                /// 임시 필터를 적용한다.
                 // Apply temporal filtering
                 data = data.apply_filter(temp);
 
+                /// 만약 disparity domain에 있다면 back을 depth로 바꾼다.
                 // If we are in disparity domain, switch back to depth
                 data = data.apply_filter(disparity2depth);
 
-                //// Apply color map for visualization of depth
+
+                /// color맵을 깊이에 시각화한다.
+                // Apply color map for visualization of depth
                 data = data.apply_filter(color_map);
 
+                /// 결과 프레임을 메인 thread에 시각화하여 보낸다.
                 // Send resulting frames for visualization in the main thread
                 postprocessed_frames.enqueue(data);
             }
@@ -205,11 +265,14 @@ int main(int argc, char * argv[]) try
     });
 
     rs2::frameset current_frameset;
+    /// App이 살아있는가?
     while(app) // Application still alive?
     {
+        /// 가능한 최신의 후처리 frameset을 얻는다.
         // Fetch the latest available post-processed frameset
         postprocessed_frames.poll_for_frame(&current_frameset);
 
+        /// 만약 current_frameset이 true 라면 
         if (current_frameset)
         {
             auto depth = current_frameset.get_depth_frame();
@@ -217,19 +280,26 @@ int main(int argc, char * argv[]) try
             auto colorized_depth = current_frameset.first(RS2_STREAM_DEPTH, RS2_FORMAT_RGB8);
 
             glEnable(GL_BLEND);
+            /// Blending의 Alpha channel을 사용한다.
             // Use the Alpha channel for blending
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+            /// 일단 colorized된 깊이 이미지로 render한다.
             // First render the colorized depth image
             depth_image.render(colorized_depth, { 0, 0, app.width(), app.height() });
 
+            /// Color frame을 랜더링한다.
+            /// ( RGBA 포멧을 골랐기 때문에,
+            /// FOV 밖에있는 픽셀들은 투명하게 보인다.)
             // Render the color frame (since we have selected RGBA format
             // pixels out of FOV will appear transparent)
             color_image.render(color, { 0, 0, app.width(), app.height() });
 
+            /// 단순 피타고라스 거리로 랜더링한다
             // Render the simple pythagorean distance
             render_simple_distance(depth, app_state, app);
 
+            /// Ruler를 랜더링한다.
             // Render the ruler
             app_state.ruler_start.render(app);
             app_state.ruler_end.render(app);
@@ -239,6 +309,7 @@ int main(int argc, char * argv[]) try
         }
     }
 
+    /// 끝내거나 끝내기 전까지 기다리게 하는 시그널 Thread들
     // Signal threads to finish and wait until they do
     alive = false;
     video_processing_thread.join();
