@@ -2,7 +2,7 @@
 // Copyright(c) 2019 Intel Corporation. All Rights Reserved.
 #include <librealsense2/rs.hpp>
 #include <mutex>
-#include "example.hpp"          // Include short list of convenience functions for rendering
+#include "example.hpp"          // Include short list of convenience functions for rendering    /// 짧은 랜더링을 위한 함수들 리스트를 포함한다.
 #include <cstring>
 
 struct short3
@@ -16,6 +16,7 @@ void draw_axes()
 {
     glLineWidth(2);
     glBegin(GL_LINES);
+    /// x,y,z 축을 그린다.
     // Draw x, y, z axes
     glColor3f(1, 0, 0); glVertex3f(0, 0, 0);  glVertex3f(-1, 0, 0);
     glColor3f(0, 1, 0); glVertex3f(0, 0, 0);  glVertex3f(0, -1, 0);
@@ -29,7 +30,9 @@ void draw_floor()
 {
     glBegin(GL_LINES);
     glColor4f(0.4f, 0.4f, 0.4f, 1.f);
+    /// "floor" 그리드를 랜더링 한다.
     // Render "floor" grid
+    /// 9번 특정 크기로 그리는 듯?
     for (int i = 0; i <= 8; i++)
     {
         glVertex3i(i - 4, 1, 0);
@@ -66,12 +69,13 @@ class camera_renderer
     std::vector<float3> positions, normals;
     std::vector<short3> indexes;
 public:
+    /// 카메라 그리는데 필요한 데이터 랜더러 초기화
     // Initialize renderer with data needed to draw the camera
     camera_renderer()
     {
         uncompress_d435_obj(positions, normals, indexes);
     }
-
+    /// 계산된 각도값을 input으로 넣고 그에 따라 3D카메라 모델을 회전시킨다.
     // Takes the calculated angle as input and rotates the 3D camera model accordignly
     void render_camera(float3 theta)
     {
@@ -80,17 +84,19 @@ public:
         glBlendFunc(GL_ONE, GL_ONE);
 
         glPushMatrix();
+        /// theta를 degree로 변환하여, 회전을 설정한다.
         // Set the rotation, converting theta to degrees
         glRotatef(theta.x * 180 / PI, 0, 0, -1);
         glRotatef(theta.y * 180 / PI, 0, -1, 0);
         glRotatef((theta.z - PI / 2) * 180 / PI, -1, 0, 0);
 
         draw_axes();
-
+        /// 카메라 drawing을 scale한다.
         // Scale camera drawing
         glScalef(0.035, 0.035, 0.035);
 
         glBegin(GL_TRIANGLES);
+        /// 카메라를 그린다.
         // Draw the camera
         for (auto& i : indexes)
         {
@@ -111,41 +117,58 @@ public:
 
 class rotation_estimator
 {
+    /// theta는 카메라의 x,y 그리고 z components의 회전 각도이다.
     // theta is the angle of camera rotation in x, y and z components
     float3 theta;
     std::mutex theta_mtx;
-    /* alpha indicates the part that gyro and accelerometer take in computation of theta; higher alpha gives more weight to gyro, but too high
-    values cause drift; lower alpha gives more weight to accelerometer, which is more sensitive to disturbances */
+    /// alpha는 theta를 계산하는 gyro와 accelerometer의 부분을 나타낸다.
+    /// 높은 알파는 gyro 값에 더 weight를 준다.
+    /// 하지만 높은 값은 drift를 일으킬수 있다.
+    /// 낮은 값은 acc에 더 가중치를 주는데,
+    /// 이는 외란에 더 민감할 수 있다.
+    /** alpha indicates the part that gyro and accelerometer take in computation of theta;
+    * higher alpha gives more weight to gyro, 
+    * but too high values cause drift; 
+    * lower alpha gives more weight to accelerometer,
+    * which is more sensitive to disturbances 
+    */
     float alpha = 0.98;
     bool firstGyro = true;
     bool firstAccel = true;
+    /// 이전 gyro 프레임의 도착 시간을 갖고있는다.
     // Keeps the arrival time of previous gyro frame
     double last_ts_gyro = 0;
 public:
+    /// Motion의 각도의 변화를 gyro 데이터를 기반으로 계산하는 함수 
     // Function to calculate the change in angle of motion based on data from gyro
     void process_gyro(rs2_vector gyro_data, double ts)
     {
+        /// 첫 iteration에서, 카메라의 초기 위치를 세팅하기 위해서 accelerometer의 데이터만 사용한다
         if (firstGyro) // On the first iteration, use only data from accelerometer to set the camera's initial position
         {
             firstGyro = false;
             last_ts_gyro = ts;
             return;
         }
+        /// 각도의 변화를 갖고, 값은 gyro로부터 계산되었다.
         // Holds the change in angle, as calculated from gyro
         float3 gyro_angle;
-
+        /// gyro_angle을 gyro 데이터로부터 초기화 한다.
         // Initialize gyro_angle with data from gyro
         gyro_angle.x = gyro_data.x; // Pitch
         gyro_angle.y = gyro_data.y; // Yaw
         gyro_angle.z = gyro_data.z; // Roll
 
+        /// 이전과 현재 gyro frame들의 도착 시간들의 차이값을 계산한다.
         // Compute the difference between arrival times of previous and current gyro frames
         double dt_gyro = (ts - last_ts_gyro) / 1000.0;
         last_ts_gyro = ts;
 
+        /// 각도변화는 (gyro 측정값) * (이전 측정 시간으로부터 지난시간) 이다.
         // Change in angle equals gyro measures * time passed since last measurement
         gyro_angle = gyro_angle * dt_gyro;
 
+        /// 계산된 각도의 변화를 현재 각도에 적용한다.
         // Apply the calculated change of angle to the current angle (theta)
         std::lock_guard<std::mutex> lock(theta_mtx);
         theta.add(-gyro_angle.z, -gyro_angle.y, gyro_angle.x);
